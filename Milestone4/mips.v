@@ -27,6 +27,7 @@ module mips(input         clk, reset,
   wire [1:0]  aluop_inC, aluop_outC;
   wire [31:0] instr_inC;
   wire [5:0]  funct_inC;
+  wire		  controls;
   // ## Jeonghwa Yu: End ##
 
   // Instantiate Controller
@@ -53,7 +54,8 @@ module mips(input         clk, reset,
 		.branch_in  (branch_inC),
 		.branch_out (branch_outC),
 		.aluop_in	(aluop_inC),
-		.aluop_out	(aluop_outC)
+		.aluop_out	(aluop_outC),
+		.controls	(controls)
 	 // ## Jeonghwa Yu: End ##		
 		);
 
@@ -86,7 +88,8 @@ module mips(input         clk, reset,
 	 .aluop		 (aluop_outC),
 	 .aluop_EX	 (aluop_inC),
 	 .instr_ID	 (instr_inC),
-	 .funct_EX	 (funct_inC)
+	 .funct_EX	 (funct_inC),
+	 .controls   (controls)
 	 // ## Jeonghwa Yu: End ##
 	 );
 
@@ -107,7 +110,8 @@ module controller(input  [5:0] op, funct,
 						input			 branch_in,
 						output		 branch_out,
 						input	 [1:0] aluop_in,
-						output [1:0] aluop_out
+						output [1:0] aluop_out,
+						input			 controls
 						// ## Jeonghwa Yu: End ##
 						);
 
@@ -130,7 +134,8 @@ module controller(input  [5:0] op, funct,
 	 .bne      (bne), // new
 	 .jal      (jal), // new
 	 // ## Jeonghwa Yu: Start ##
-    .aluop    (aluop_out)
+    .aluop    (aluop_out),
+  .controlsrc (controls)
 	 // ## Jeonghwa Yu: End ##
 	 );
 
@@ -158,12 +163,18 @@ module maindec(input  [5:0] op,
                output       regdst, regwrite,
                output       jump,
                output       bne, jal, // new
-               output [1:0] aluop);
+               output [1:0] aluop,
+					// ## Jeonghwa Yu: Start ##
+					input			 controlsrc
+					// ## Jeonghwa Yu: End ##
+					);
 
   reg [12:0] controls;
 
+  // ###### Jeonghwa Yu: Start ######
   assign {signext, shiftl16, regwrite, regdst, alusrc, branch, bne, memwrite,
-          memtoreg, jump, jal, aluop} = controls;
+          memtoreg, jump, jal, aluop} = controlsrc ? 13'b0 : controls;
+  // ###### Jeonghwa Yu: End ######
 
   always @(*)
     case(op)
@@ -234,7 +245,8 @@ module datapath(input         clk, reset,
 					 input  [1:0]  aluop,
 					 output [1:0]	aluop_EX,
 					 output [31:0] instr_ID,
-					 output [5:0] 	funct_EX
+					 output [5:0] 	funct_EX,
+					 output			controls
 					 // ## Jeonghwa Yu: End ##
 					 );
 
@@ -243,7 +255,7 @@ module datapath(input         clk, reset,
   wire [31:0] signimm, signimmsh, shiftedimm;
   wire [31:0] srca, srcb;
   wire [31:0] result;
-  wire        shift;
+//  wire        shift;  => not used
   
   wire [4:0]  writereg_wrmux; // new in 3, bit change 32->5 in 4
   wire [31:0] result_resmux, pcnext_pcb; // new! in 3
@@ -251,27 +263,31 @@ module datapath(input         clk, reset,
   //	######	Jeonghwa Yu: Start	######
   wire [31:0] pcplus4_ID, writedata_ID;
   
-  wire [31:0] pcplus4_EX, srca_EX, aluout_EX, writedata_EX, signimm_EX;
-  wire [4:0]  wrmux_in0, wrmux_in1;
-  wire		  regdst_EX, alusrc_EX, jal_EX, shiftl16_EX;
-  wire [2:0]  ControlWB_E;
-  wire [1:0]  ControlM;
+  wire [31:0] pcplus4_EX, srca_EX, aluout_EX, writedata_EX, signimm_EX, writedata_out, instr_EX;
+  wire [4:0]  wrmux_in0, wrmux_in1, rs_EX;
+ // wire		  regdst_EX, alusrc_EX, shiftl16_EX, zero_EX;
+  wire [2:0]  ControlWB_E, ControlM;
   
-  wire [31:0] pcbranch_M;
-  wire		  zero_M;
+  wire [31:0] pcbranch_M, pcplus4_M, instr_M;
   wire [4:0]  writereg_M;
   wire [2:0]  ControlWB_M;
+  wire		  jump_M;
   
   wire [31:0] readdata_WB, aluout_WB;
   wire [4:0]  writereg_WB;
   wire		  regwrite_WB, memtoreg_WB, jal_WB;
   
+  wire [31:0] srca_out;
+  wire [1:0]  srcasrc, srcbsrc;
+  wire		  IFIDwrite, PCwrite;
+  wire		  controls_EX, controls_M, controls_WB;
   //	######	Jeonghwa Yu: End	######
   
   // next PC logic
-  flopr #(32) pcreg(
+  flopenr #(32) pcreg(
     .clk   (clk),
     .reset (reset),
+	 .en	  (PCwrite), // add in milestone4
     .d     (pcnext),
     .q     (pc));
 
@@ -281,84 +297,83 @@ module datapath(input         clk, reset,
     .y (pcplus4));
 
   sl2 immsh(
-    .a (signimm_EX),
+    .a (signimm_EX), // change in milestone4
     .y (signimmsh));
-				 
+
   adder pcadd2(
-    .a (pcplus4_EX),
+    .a (pcplus4_EX), // change in milestone4
     .b (signimmsh),
     .y (pcbranch));
 
   mux2 #(32) pcbrmux(
     .d0  (pcnext_pcb),
-    .d1  (pcbranch_M),
+    .d1  (pcbranch_M), // change in milestone4
     .s   (pcsrc),
     .y   (pcnextbr));
 
   mux2 #(32) pcmux(
     .d0   (pcnextbr),
-    .d1   ({pcplus4[31:28], instr[25:0], 2'b00}),
-    .s    (jump),
+    .d1   ({pcplus4_M[31:28], instr_M[25:0], 2'b00}), // change in milestone4
+    .s    (jump_M), // change in milestone4
     .y    (pcnext));
 
   // register file logic
   regfile rf(
     .clk     (clk),
-    .we      (regwrite_WB),
-    .ra1     (instr_ID[25:21]),
-    .ra2     (instr_ID[20:16]),
-    .wa      (writereg_WB),
+    .we      (regwrite_WB), // change in milestone4
+    .ra1     (instr_ID[25:21]), // change in milestone4
+    .ra2     (instr_ID[20:16]), // change in milestone4
+    .wa      (writereg_WB), // change in milestone4
     .wd      (result),
     .rd1     (srca),
-    .rd2     (writedata_ID));
+    .rd2     (writedata_ID)); // change in milestone4
 
-  mux2 #(5) wrmux(
-    .d0  (wrmux_in0),
-    .d1  (wrmux_in1),
-    .s   (regdst_EX),
+  mux2 #(5) wrmux( 
+    .d0  (instr_EX[20:16]), // Rt  change in milestone4
+    .d1  (instr_EX[15:11]), // Rd  change in milestone4
+    .s   (regdst_EX), // change in milestone4
     .y   (writereg_wrmux));
 
   mux2 #(32) resmux(
-    .d0 (aluout_WB),
-    .d1 (readdata_WB),
-    .s  (memtoreg_WB),
+    .d0 (aluout_WB), // change in milestone4
+    .d1 (readdata_WB), // change in milestone4
+    .s  (memtoreg_WB), // change in milestone4
     .y  (result_resmux));
 
   sign_zero_ext sze(
-    .a       (instr_ID[15:0]),
+    .a       (instr_ID[15:0]), // change in milestone4
     .signext (signext),
     .y       (signimm[31:0]));
 
   shift_left_16 sl16(
-    .a         (signimm_EX[31:0]),
-    .shiftl16  (shiftl16_EX),
+    .a         (signimm_EX[31:0]), // change in milestone4
+    .shiftl16  (shiftl16_EX), // change in milestone4
     .y         (shiftedimm[31:0]));
 
   // ALU logic
   mux2 #(32) srcbmux(
-    .d0 (writedata_EX),
+    .d0 (writedata_out), // change in milestone4
     .d1 (shiftedimm[31:0]),
-    .s  (alusrc_EX),
+    .s  (alusrc_EX), // change in milestone4
     .y  (srcb));
 
   alu alu(
-    .a       (srca_EX),
+    .a       (srca_out), // change in milestone4
     .b       (srcb),
     .alucont (alucontrol),
-    .result  (aluout_EX),
-    .zero    (zero_EX));
+    .result  (aluout_EX), // change in milestone4
+    .zero    (zero_EX)); // change in milestone4
     
-  // new! in 3
   mux2 #(5) jalamux(
     .d0 (writereg_wrmux),
     .d1 (5'b11111),
-    .s  (jal_EX),
+    .s  (ControlWB_E[1]), // jal_EX  change in milestone4
     .y  (writereg));
   
   mux2 #(32) jaldmux(
     .d0 (result_resmux),
     .d1 (pcplus4),
-    .s  (jal_WB),
+    .s  (jal_WB), // change in milestone4
     .y  (result));
 
   mux_jr pcjrmux(
@@ -366,39 +381,76 @@ module datapath(input         clk, reset,
     .d1 (aluout),
     .s  (alucontrol),
     .y  (pcnext_pcb));
-	 
+
 // ######	Jeonghwa Yu: Start	######
+  mux3 #(32) srcamux3(
+    .d0  (srca_EX),
+	 .d1  (aluout),
+	 .d2  (result),
+	 .s   (srcasrc),
+	 .y   (srca_out));
+	 
+  mux3 #(32) srcbmux3(
+    .d0  (writedata_EX),
+	 .d1  (aluout),
+	 .d2  (result),
+	 .s   (srcbsrc),
+	 .y   (writedata_out));
+	 
+  fwunit f(
+	 .rt		 (instr_EX[20:16]),
+	 .rs		 (instr_EX[25:21]),
+	 .MEMrd	 (writereg_M),
+	 .WBrd	 (writereg_WB),
+	 .hazardM (controls_M),
+	.hazardWB (controls_WB),
+	 .srcasrc (srcasrc),
+	 .srcbsrc (srcbsrc)
+	 );
+	 
+  hzdunit h(
+    .rt			(instr_EX[20:16]),
+	 .rs_ID		(instr_ID[25:21]),
+	 .rt_ID	   (instr_ID[20:16]),
+	 .memread   (ControlWB_E[0]), // memtoreg_EX
+	 .controls  (controls),
+	 .IFIDwrite (IFIDwrite),
+	 .PCwrite   (PCwrite));
+  
   flopenr #(64) IFtoID(
     .clk   (clk),
     .reset (reset),
-	 .en	  (1'b1),
+    .en	  (IFIDwrite),
     .d     ({pcplus4	  , instr}),
     .q     ({pcplus4_ID, instr_ID}));
 
-  flopenr #(156) IDtoEX(
+  flopenr #(178) IDtoEX(
     .clk   (clk),
     .reset (reset),
 	 .en	  (1'b1),
-    .d     ({regwrite, jal, memtoreg, branch	  , memwrite	,
-				 regdst	 ,	aluop   , alusrc	 , pcplus4_ID, srca	 , shiftl16   ,
-				 writedata_ID, signimm   , signimm[5:0], instr_ID[20:16], instr_ID[15:11]}),
+    .d     ({regwrite, jal, memtoreg, branch, memwrite, jump,
+				 regdst	 ,	aluop   , alusrc	 , pcplus4_ID, srca	 , shiftl16   , controls   ,
+				 writedata_ID, signimm   , signimm[5:0], instr_ID}),
     .q     ({ControlWB_E				, ControlM					,
-				 regdst_EX, aluop_EX, alusrc_EX, pcplus4_EX, srca_EX, shiftl16_EX,
-				 writedata_EX, signimm_EX, funct_EX    , wrmux_in0	    , wrmux_in1}));
+				 regdst_EX, aluop_EX, alusrc_EX, pcplus4_EX, srca_EX, shiftl16_EX, controls_EX,
+				 writedata_EX, signimm_EX, funct_EX    , instr_EX}));
 
-  flopenr #(107) EXtoMEM(
+  flopenr #(173) EXtoMEM(
     .clk   (clk),
     .reset (reset),
 	 .en	  (1'b1),
-    .d     ({ControlWB_E, ControlM						 , pcbranch  , zero_EX, aluout_EX, writedata_EX, writereg}),
-    .q     ({ControlWB_M, branch_out , memwrite_out , pcbranch_M, zero	, aluout	  , writedata   , writereg_M}));	 
+    .d     ({ControlWB_E, ControlM						 		  ,
+				 pcbranch  , zero_EX, aluout_EX, writedata_out, writereg  , controls_EX, pcplus4_EX, instr_EX}),
+    .q     ({ControlWB_M, branch_out , memwrite_out, jump_M,
+				 pcbranch_M, zero	 , aluout	, writedata    , writereg_M, controls_M , pcplus4_M , instr_M}));	 
 	
-  flopenr #(72) MEMtoWB(
+  flopenr #(78) MEMtoWB(
     .clk   (clk),
     .reset (reset),
 	 .en	  (1'b1),
-    .d     ({ControlWB_M							, readdata   , aluout	, writereg_M}),
-    .q     ({regwrite_WB, jal_WB, memtoreg_WB, readdata_WB, aluout_WB, writereg_WB})); 
+    .d     ({ControlWB_M							, readdata   , aluout	, writereg_M , controls_M}),
+    .q     ({regwrite_WB, jal_WB, memtoreg_WB, readdata_WB, aluout_WB, writereg_WB, controls_WB})); 
+	
 // ######	Jeonghwa Yu: End	######
     
 endmodule
