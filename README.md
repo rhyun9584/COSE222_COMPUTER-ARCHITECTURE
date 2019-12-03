@@ -1,11 +1,11 @@
 # COSE222_COMPUTER-ARCHITECTURE
 
-- Assignment\
+- Assignment
 
-- Milestone3\
+- Milestone3
 
-- Milestone4\
+- Milestone4
 
-- Milestone5\
+- Milestone5
 
-- Milestone6 (final)\
+- Milestone6 (final)
