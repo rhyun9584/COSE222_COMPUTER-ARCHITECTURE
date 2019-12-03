@@ -1,0 +1,20 @@
+add instructions : sltu, bne, jal, jr
+
+sltu:
+alucontrol을 3bit에서 4bit로 변경, alucontro[3] 값으로 slt와 slut 구분
+
+bne:
+control을 11bit에서 12bit로 변경, bne flag를 생성해 이후 controller에서 pcsrc을 생성할때 zero의 값을 inverse(bne)할지 그대로(beq)넣을지 구분
+
+jal:
+1. PC+4의 값을 레지스터 ra에 저장 후 
+mux를 두개 추가하여 저장위치값인 $31을 wa에 넣어주고 pc+4 값을 wd에 넣어주어
+$31의 위치에 PC+4의 값 저장
+여기서 flag 값은 위에서 12bit로 변경한 control을 13bit로 늘려주고 jal flag 생성
+
+2. jumptarget의 위치로 이동
+기존 j instruction을 위해 구현된 그대로 돌아감
+
+jr:
+ra에 저장된 돌아갈 값을 가져와
+alucontrol[3:0] = 4'b1010 인 경우(jr) 그 값을 다음 PC로 넣어주어 이동
